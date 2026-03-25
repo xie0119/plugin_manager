@@ -1,0 +1,6 @@
+{
+  "xml_path": "C:\\work\\actions\\ats3085s_gps_2.0\\customize\\a5s15gly-C220G-X1\\xml\\firmware.xml",
+  "partition_name": "clock_res",
+  "new_size": "0x1200000",
+  "output_path": "C:\\work\\actions\\ats3085s_gps_2.0\\customize\\a5s15gly-C220G-X2\\xml\\firmware11.xml"
+}

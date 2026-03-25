@@ -1,0 +1,75 @@
+QMainWindow {
+    background-color: #F5F7FA;
+}
+
+QWidget#rootCentral {
+    background-color: #F5F7FA;
+}
+
+/* 顶部工具栏 */
+QWidget#topBar {
+    background-color: #FFFFFF;
+    border-bottom: 1px solid #E0E4EA;
+}
+
+QLineEdit#searchEdit {
+    border-radius: 4px;
+    border: 1px solid #D0D5DD;
+    padding: 4px 8px;
+    background: #F9FAFB;
+}
+
+QPushButton#refreshButton {
+    border-radius: 4px;
+    padding: 4px 10px;
+    background-color: #409EFF;
+    color: #FFFFFF;
+}
+
+QPushButton#refreshButton:hover {
+    background-color: #66B1FF;
+}
+
+/* 左侧插件列表区域 */
+QWidget#leftPanel {
+    background-color: #FFFFFF;
+    border-right: 1px solid #E0E4EA;
+}
+
+QListWidget#pluginList {
+    border: none;
+    outline: none;
+    background: transparent;
+}
+
+QListWidget#pluginList::item {
+    border: none;
+}
+
+QListWidget#pluginList::item:selected {
+    background-color: #E6F1FF;
+}
+
+QListWidget#pluginList::item:hover {
+    background-color: #F2F6FC;
+}
+
+QLabel#pluginTitle {
+    font-size: 14px;
+    color: #1F2933;
+}
+
+QLabel#pluginSubtitle {
+    font-size: 11px;
+    color: #6B7280;
+}
+
+/* 右侧内容区 */
+QWidget#rightPanel {
+    background-color: #F5F7FA;
+}
+
+QStackedWidget#pluginStack {
+    background-color: #F5F7FA;
+}
+
