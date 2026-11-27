@@ -1,0 +1,97 @@
+QMainWindow {
+    background-color: #F5F7FA;
+}
+
+QWidget#rootCentral {
+    background-color: #F5F7FA;
+}
+
+QLineEdit#searchEdit {
+    border-radius: 4px;
+    border: 1px solid #D0D5DD;
+    padding: 4px 8px;
+    background: #F9FAFB;
+}
+
+/* 左侧插件列表区域 */
+QWidget#leftPanel {
+    background-color: #FFFFFF;
+    border-right: 1px solid #E0E4EA;
+}
+
+QListWidget#pluginList {
+    border: none;
+    outline: none;
+    background: transparent;
+}
+
+QListWidget#pluginList::item {
+    border: none;
+}
+
+QListWidget#pluginList::item:selected {
+    background-color: #E6F1FF;
+}
+
+QListWidget#pluginList::item:hover {
+    background-color: #F2F6FC;
+}
+
+QLabel#pluginTitle {
+    font-size: 14px;
+    color: #1F2933;
+}
+
+QLabel#pluginSubtitle {
+    font-size: 11px;
+    color: #6B7280;
+}
+
+/* 右侧内容区 */
+QWidget#rightPanel {
+    background-color: #F5F7FA;
+}
+
+QStackedWidget#pluginStack {
+    background-color: #F5F7FA;
+}
+
+/* Standard plugin controls follow the existing launcher palette. */
+QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+    background-color: #FFFFFF;
+    color: #1F2933;
+    border: 1px solid #D0D5DD;
+    border-radius: 4px;
+    padding: 4px 8px;
+    selection-background-color: #409EFF;
+}
+
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus,
+QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+    border-color: #409EFF;
+}
+
+QPushButton {
+    border: 1px solid #409EFF;
+    border-radius: 4px;
+    padding: 6px 12px;
+    background-color: #409EFF;
+    color: #FFFFFF;
+}
+
+QPushButton:hover {
+    background-color: #66B1FF;
+    border-color: #66B1FF;
+}
+
+QPushButton:pressed {
+    background-color: #337ECC;
+    border-color: #337ECC;
+}
+
+QPushButton:disabled {
+    background-color: #D0D5DD;
+    border-color: #D0D5DD;
+    color: #FFFFFF;
+}
+

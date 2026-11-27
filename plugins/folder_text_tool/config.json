@@ -1,0 +1,10 @@
+{
+  "id": "folder_text_tool",
+  "name": "目录插件-文本工具",
+  "description": "可独立运行的文本工具，支持反转文本。",
+  "entry": "plugin.py",
+  "version": "2.0.0",
+  "category": "文本工具",
+  "icon": "",
+  "enabled": true
+}
