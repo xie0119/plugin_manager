@@ -1,0 +1,28 @@
+QWidget#btBatchOtaTool,
+QScrollArea#otaFormScroll,
+QWidget#otaFormViewport {
+    background-color: #F5F7FA;
+}
+
+QGroupBox#otaForm {
+    background-color: #F5F7FA;
+    border: 1px solid #DCE2EA;
+    border-radius: 6px;
+    margin-top: 10px;
+    padding: 8px 2px 2px;
+}
+
+QGroupBox#otaForm::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 12px;
+    padding: 0 6px;
+    color: #465467;
+    background-color: #F5F7FA;
+}
+
+QLabel#otaHelpText {
+    font-size: 13px;
+    color: #586577;
+    background-color: transparent;
+}
