@@ -11,6 +11,7 @@ import threading
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -61,6 +62,8 @@ class BatchOtaWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("btBatchOtaTool")
+        self.setStyleSheet(Path(__file__).with_name("style.qss").read_text(encoding="utf-8"))
         self.setAttribute(Qt.WA_QuitOnClose, False)
         self.running = False
         self.runner = None
@@ -122,9 +125,12 @@ class BatchOtaWidget(QWidget):
 
         splitter = QSplitter(Qt.Vertical)
         scroll = QScrollArea()
+        scroll.setObjectName("otaFormScroll")
+        scroll.viewport().setObjectName("otaFormViewport")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
         form_box = QGroupBox("筛选与升级内容")
+        form_box.setObjectName("otaForm")
         form = QFormLayout(form_box)
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         self.prefix = self._entry("蓝牙名筛选", "XFN_")
@@ -163,14 +169,25 @@ class BatchOtaWidget(QWidget):
         form.addRow("modem 超时（秒）", self._paired(
             ("发送超时", self.send_timeout), ("升级超时", self.wait_timeout)))
         form.addRow("", self.alert_on_success)
-        help_text = QLabel(
-            "蓝牙名无逗号时按前缀匹配；英文逗号分隔时匹配完整名称。\n"
-            "OTA 文件留空可单独升级 modem；v030_v031_delta.par 自动填入版本 030 → 031。\n"
-            "同时台数可设 1～20 台；停止后等待正在处理的设备完成，回连核验优先。\n"
-            "发送与升级超时按进度连续不变计时；结果未知时保留记录并转下一台。")
-        help_text.setWordWrap(True)
-        help_text.setObjectName("pluginSubtitle")
-        form.addRow(help_text)
+        help_box = QWidget()
+        help_layout = QVBoxLayout(help_box)
+        help_layout.setContentsMargins(0, 6, 0, 2)
+        help_layout.setSpacing(4)
+        for text in (
+            "蓝牙名无逗号时按前缀匹配；英文逗号分隔时匹配完整名称。",
+            "OTA 文件留空可单独升级 modem；v030_v031_delta.par 自动填入版本 030 → 031。",
+            "同时台数可设 1～20 台；停止后等待正在处理的设备完成，回连核验优先。",
+            "发送与升级超时按进度连续不变计时；结果未知时保留记录并转下一台。",
+        ):
+            help_text = QLabel(text)
+            help_text.setObjectName("otaHelpText")
+            help_text.setTextFormat(Qt.PlainText)
+            help_text.setWordWrap(True)
+            hint_font = help_text.font()
+            hint_font.setLetterSpacing(QFont.AbsoluteSpacing, 0.5)
+            help_text.setFont(hint_font)
+            help_layout.addWidget(help_text)
+        form.addRow(help_box)
         scroll.setWidget(form_box)
         splitter.addWidget(scroll)
 
