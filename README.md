@@ -137,13 +137,15 @@ python -m unittest discover -s tests -v
 
 不再包含共享蓝牙、设备管理、事件总线、配置服务、运行时依赖安装或自定义二进制插件包。
 
-## Windows 打包
+## Windows 安装包
+
+现在只编译 `start.py` 启动器，使用 PyInstaller onedir 目录版。`main.py` 和业务界面不编译；安装包附带完整便携 Python 与 Git，安装后由启动器拉取仓库、安装依赖并执行 main.py。
 
 ```powershell
-python -m pip install -e ".[build]"
-pyinstaller --clean --noconfirm main.spec
+python -m pip install "pyinstaller>=6,<7" "zstandard>=0.22,<1"
+python tools/build_installer.py
 ```
 
-生成 `dist/PluginManager.exe`。将 `plugins/` 放在 EXE 旁边，插件保持外置。主题已随 EXE 打包。
+也可双击 `build.bat`。输出 `dist/PluginManager-2.1.0-Setup-x64.exe`；目录版为 `dist/PluginManager/`。最终用户无需预装 Python、Git，也无需运行下载脚本。
 
-PyInstaller 不会自动分析这些外置插件的全部第三方依赖。新增依赖需要在发布环境中另外准备、验证并按需加入打包配置，不能把“源码下能运行”等同于“EXE 已包含全部依赖”。
+源码开发仍使用 `python main.py`。完整目录、仓库配置、更新与卸载说明见 [BOOTSTRAP.md](BOOTSTRAP.md)。

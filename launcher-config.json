@@ -1,0 +1,10 @@
+{
+  "repository_url": "https://github.com/xie0119/plugin_manager.git",
+  "branch": "",
+  "repository_dir": "repository",
+  "entry_point": "main.py",
+  "requirements_file": "requirements.txt",
+  "update_on_launch": true,
+  "pip_index_url": "",
+  "command_timeout": 1800
+}

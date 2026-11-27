@@ -1,94 +1,51 @@
-"""Build a Windows executable and a portable release with external plugins."""
-
+"""Compile only start.py as onedir, then add portable Python and Git."""
 from __future__ import annotations
-
-import hashlib
+import argparse
 import json
 import os
+from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
 import zipfile
-from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from start import VERSION  # noqa: E402
+from tools.portable_runtime import digest, portable_runtime  # noqa: E402
 
 
 def main() -> int:
-    if sys.version_info < (3, 10):
-        raise SystemExit("请使用 Python 3.10 或更高版本运行本打包脚本。")
-    if sys.platform != "win32":
-        raise SystemExit("Windows EXE 需要在 Windows 上打包。")
-
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--zip", action="store_true", help="同时输出便携 ZIP")
+    args = parser.parse_args()
+    if sys.platform != "win32" or struct.calcsize("P") != 8 or sys.version_info < (3, 10):
+        raise SystemExit("请使用 Windows x64 Python 3.10+ 构建启动器")
     environment = os.environ.copy()
-    # An optional offline tool directory belongs to the build only, never to the app.
-    local_tools = ROOT / ".build-tools" / "site-packages"
-    if (local_tools / "PyInstaller").is_dir():
-        environment["PYTHONPATH"] = str(local_tools)
-    environment["PYINSTALLER_CONFIG_DIR"] = str(ROOT / "build" / "pyinstaller-cache")
-    command = [
-        sys.executable,
-        "-B",
-        "-m",
-        "PyInstaller",
-        "--clean",
-        "--noconfirm",
-        "--workpath",
-        str(ROOT / "build" / "PluginManager"),
-        "--distpath",
-        str(ROOT / "dist"),
-        str(ROOT / "main.spec"),
-    ]
-    subprocess.run(command, cwd=ROOT, env=environment, check=True)
-
-    executable = ROOT / "dist" / "PluginManager.exe"
-    if not executable.is_file():
-        raise RuntimeError("打包进程结束，但没有生成 PluginManager.exe")
-    release = ROOT / "dist" / "PluginManager"
-    if release.is_symlink() or release.resolve().parent != (ROOT / "dist").resolve():
-        raise RuntimeError(f"发布目录超出 dist：{release}")
-    if release.exists():
-        shutil.rmtree(release)
-    release.mkdir()
-    shutil.move(str(executable), release / executable.name)
-    shutil.copytree(
-        ROOT / "plugins",
-        release / "plugins",
-        ignore=shutil.ignore_patterns(
-            "__pycache__", "*.pyc", "*.pyo", ".venv", ".git",
-            "settings.json", "settings.json.tmp",
-        ),
-    )
-    (release / "使用说明.txt").write_text(
-        "PluginManager 2.0.0\n\n"
-        "双击 PluginManager.exe 启动，无需安装 Python。\n"
-        "请将 plugins 文件夹与 EXE 放在一起；新增插件后按 F5 刷新。\n"
-        "点击左侧工具后才会加载插件；Ctrl+F 搜索。\n"
-        "插件用户设置由插件自行保存，不会覆盖 config.json。\n"
-        "自带文本工具已随本发布包验证。新增第三方依赖需另外准备和验证。\n",
-        encoding="utf-8-sig",
-    )
-    build_info = {
-        "application": "PluginManager",
-        "version": "2.0.0",
-        "python": sys.version.split()[0],
-        "platform": "windows-x64",
-        "executable": "PluginManager.exe",
-        "sha256": hashlib.file_digest((release / "PluginManager.exe").open("rb"), "sha256").hexdigest()
-        if sys.version_info >= (3, 11)
-        else hashlib.sha256((release / "PluginManager.exe").read_bytes()).hexdigest(),
-    }
-    (release / "build-info.json").write_text(
-        json.dumps(build_info, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    archive = ROOT / "dist" / "PluginManager-2.0.0-windows-x64.zip"
-    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-        for path in sorted(release.rglob("*")):
-            if path.is_file():
-                bundle.write(path, path.relative_to(release.parent))
-    print(f"Executable: {release / 'PluginManager.exe'}")
-    print(f"Portable ZIP: {archive}")
-    print(f"SHA256: {build_info['sha256']}")
+    environment["PYINSTALLER_CONFIG_DIR"] = str(ROOT / "build/pyinstaller-cache")
+    subprocess.run([sys.executable, "-B", "-m", "PyInstaller", "--clean", "--noconfirm",
+                    "--workpath", str(ROOT / "build/bootstrap"), "--distpath", str(ROOT / "dist"),
+                    str(ROOT / "main.spec")], cwd=ROOT, env=environment, check=True)
+    release = ROOT / "dist/PluginManager"
+    if not (release / "PluginManager.exe").is_file() or not (release / "_internal").is_dir():
+        raise RuntimeError("未生成目录版启动器")
+    shutil.copytree(portable_runtime(), release / "runtime", dirs_exist_ok=True)
+    shutil.copy2(ROOT / "launcher-config.json", release)
+    shutil.copy2(ROOT / "start.py", release)
+    shutil.copy2(ROOT / "BOOTSTRAP.md", release / "使用说明.md")
+    info = {"application": "PluginManager", "version": VERSION,
+            "entry": "start.py", "mode": "onedir", "business_source_compiled": False,
+            "executable_sha256": digest(release / "PluginManager.exe")}
+    (release / "build-info.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
+    if args.zip:
+        archive = ROOT / "dist" / f"PluginManager-{VERSION}-portable-x64.zip"
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+            for path in sorted(release.rglob("*")):
+                if path.is_file():
+                    bundle.write(path, path.relative_to(release.parent))
+        print(f"Portable ZIP: {archive}")
+    print(f"Directory launcher: {release / 'PluginManager.exe'}")
     return 0
 
 
