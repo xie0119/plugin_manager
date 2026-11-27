@@ -26,6 +26,10 @@ class PluginLoadError(RuntimeError):
     """A plugin failed to create its embedded widget."""
 
 
+class PluginUnloadError(RuntimeError):
+    """A plugin still has work that must finish before unloading."""
+
+
 class _SourceLoader(importlib.machinery.SourceFileLoader):
     """Plugin refreshes always read current sources, including helper modules."""
 
@@ -151,6 +155,15 @@ class PluginManager:
             raise PluginLoadError(f"{plugin.name}：{exc}") from exc
 
     def unload_all(self) -> None:
+        # Check every plugin before releasing any widgets or Python modules.
+        # A busy tool may request a graceful stop while refusing this unload.
+        for plugin_id, loaded in tuple(self._loaded.items()):
+            if not isValid(loaded.widget):
+                continue
+            can_unload = getattr(loaded.widget, "can_unload", None)
+            if callable(can_unload) and not can_unload():
+                name = self._plugins[plugin_id].name
+                raise PluginUnloadError(f"{name} 正在完成任务，请等待设备处理结束后再刷新或退出。")
         for plugin_id, loaded in tuple(self._loaded.items()):
             try:
                 if isValid(loaded.widget):

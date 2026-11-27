@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSignalBlocker, Qt
+from PySide6.QtCore import QSignalBlocker, Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QLabel,
@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from launcher.plugin_manager import PluginLoadError, PluginManager
+from launcher.plugin_manager import PluginLoadError, PluginManager, PluginUnloadError
 from launcher.ui.plugin_list_item import PluginListItemWidget, PluginSearchItemWidget
 
 
@@ -27,6 +27,9 @@ class MainWindow(QMainWindow):
         super().__init__(parent)
         self._manager = PluginManager(plugins_dir)
         self._current_id: str | None = None
+        self._close_retry = QTimer(self)
+        self._close_retry.setInterval(250)
+        self._close_retry.timeout.connect(self.close)
         self._build_ui()
         self.refresh_plugins()
 
@@ -93,9 +96,13 @@ class MainWindow(QMainWindow):
     def refresh_plugins(self) -> None:
         previous_id = self._current_id
         query = self._search.text() if hasattr(self, "_search") else ""
+        try:
+            result = self._manager.scan()
+        except PluginUnloadError as exc:
+            self.statusBar().showMessage(str(exc))
+            return
         while self._stack.count() > 1:
             self._stack.removeWidget(self._stack.widget(1))
-        result = self._manager.scan()
         self._current_id = None
         selected = None
         with QSignalBlocker(self._list):
@@ -172,9 +179,18 @@ class MainWindow(QMainWindow):
             plugin = self._manager.plugins[item.data(Qt.UserRole)]
             item.setHidden(query not in plugin.search_text)
 
-    def shutdown(self) -> None:
-        self._manager.unload_all()
+    def shutdown(self) -> bool:
+        try:
+            self._manager.unload_all()
+        except PluginUnloadError as exc:
+            self.statusBar().showMessage(str(exc))
+            return False
+        return True
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        self.shutdown()
+        if not self.shutdown():
+            self._close_retry.start()
+            event.ignore()
+            return
+        self._close_retry.stop()
         super().closeEvent(event)

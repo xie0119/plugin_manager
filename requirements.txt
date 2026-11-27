@@ -1,1 +1,2 @@
 PySide6>=6.4,<7
+-r plugins/bt_batch_ota_tool/requirements.txt

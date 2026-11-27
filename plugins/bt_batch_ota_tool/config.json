@@ -1,0 +1,10 @@
+{
+  "id": "bt_batch_ota_tool",
+  "name": "蓝牙批量 OTA",
+  "description": "手表固件与 modem 批量升级、并发处理、版本核验及记录导出",
+  "entry": "plugin.py",
+  "version": "2026.11.25.1",
+  "category": "蓝牙工具 固件升级 BtBatchOtaTool",
+  "icon": "",
+  "enabled": true
+}

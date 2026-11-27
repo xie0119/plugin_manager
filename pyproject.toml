@@ -8,7 +8,7 @@ version = "2.0.0"
 description = "A lightweight desktop launcher for independent PySide6 tools"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["PySide6>=6.4,<7"]
+dependencies = ["PySide6>=6.4,<7", "bleak==0.22.3", "pyserial>=3.5,<4"]
 
 [project.optional-dependencies]
 dev = ["ruff>=0.8,<1"]
@@ -34,3 +34,4 @@ select = ["E4", "E7", "E9", "F", "I"]
 [tool.ruff.lint.per-file-ignores]
 # Qt's offscreen environment must be set before the first Qt import.
 "tests/test_launcher.py" = ["E402"]
+"tests/test_bt_batch_ota_plugin.py" = ["E402"]
