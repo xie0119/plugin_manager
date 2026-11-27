@@ -17,9 +17,50 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from urllib.parse import urlsplit
+from urllib.request import getproxies
 
-VERSION = "2.1.0"
+VERSION = "2.1.1"
+
+# 在子进程自己的 GUI 线程确认窗口就绪，不修改拉取的业务源码。
+APPLICATION_RUNNER = r'''
+import json, os, runpy, sys
+from pathlib import Path
+entry, signal, token = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+sys.argv = [str(entry), *sys.argv[4:]]
+sys.path.insert(0, str(entry.parent))
+lock = (signal.parent.parent / "application.lock").open("a+b")
+if not lock.tell():
+    lock.write(b"0"); lock.flush()
+lock.seek(0)
+if os.name == "nt":
+    import msvcrt
+    msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+try:
+    from PySide6 import QtWidgets
+    from PySide6.QtCore import QTimer
+    OriginalApplication = QtWidgets.QApplication
+    class ReadyApplication(OriginalApplication):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._bootstrap_timer = QTimer(self)
+            self._bootstrap_timer.timeout.connect(self._bootstrap_ready)
+            self._bootstrap_timer.start(100)
+        def _bootstrap_ready(self):
+            if any(window.isVisible() for window in self.topLevelWidgets()):
+                temporary = signal.with_suffix(".tmp")
+                temporary.write_text(json.dumps({"pid": os.getpid(), "token": token}), encoding="utf-8")
+                temporary.replace(signal)
+                self._bootstrap_timer.stop()
+    QtWidgets.QApplication = ReadyApplication
+except ImportError:
+    pass
+try:
+    runpy.run_path(str(entry), run_name="__main__")
+finally:
+    lock.close()
+'''
 
 
 def install_directory() -> Path:
@@ -45,6 +86,9 @@ class Config:
     update_on_launch: bool = True
     pip_index_url: str = ""
     command_timeout: int = 1800
+    update_timeout: int = 5
+    startup_timeout: int = 60
+    proxy_url: str = ""
 
     @classmethod
     def load(cls, root: Path) -> Config:
@@ -53,8 +97,11 @@ class Config:
         url = urlsplit(config.repository_url)
         if url.scheme != "https" or not url.hostname or url.username or url.password:
             raise ValueError("仓库必须使用不包含账号密码的 HTTPS 地址")
-        if config.branch.startswith("-") or config.command_timeout < 10:
+        if (config.branch.startswith("-") or config.command_timeout < 10 or
+                config.update_timeout < 1 or config.startup_timeout < 1):
             raise ValueError("分支或超时配置无效")
+        if config.proxy_url and urlsplit(config.proxy_url).scheme not in {"http", "https"}:
+            raise ValueError("proxy_url 需要 HTTP 或 HTTPS 代理地址")
         repo = child_path(root, config.repository_dir)
         if repo.parts[len(root.resolve().parts)].lower() in {"runtime", "_internal", ".venv", "logs", "tools", "launcher"}:
             raise ValueError("仓库目录与启动器目录冲突")
@@ -65,9 +112,9 @@ class Config:
 
 
 @contextmanager
-def instance_lock(root: Path):
+def instance_lock(root: Path, filename="launcher.lock"):
     """每个安装目录一个实例，不允许并发 git / pip。"""
-    with (root / "launcher.lock").open("a+b") as handle:
+    with (root / filename).open("a+b") as handle:
         if not handle.tell():
             handle.write(b"0")
             handle.flush()
@@ -77,7 +124,8 @@ def instance_lock(root: Path):
             try:
                 msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
             except OSError as error:
-                raise RuntimeError("此安装目录的启动器已在运行，请使用现有窗口") from error
+                message = "主程序已在运行，请使用现有窗口" if filename == "application.lock" else "此安装目录的启动器已在运行，请使用现有窗口"
+                raise RuntimeError(message) from error
         try:
             yield
         finally:
@@ -86,7 +134,8 @@ def instance_lock(root: Path):
                 msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def clean_environment(python: Path | None = None, git: Path | None = None) -> dict[str, str]:
+def clean_environment(python: Path | None = None, git: Path | None = None,
+                      proxy_url: str = "") -> dict[str, str]:
     environment = os.environ.copy()
     # PyInstaller 的 Tcl/Qt/DLL 配置不可污染外部便携 Python 与业务进程。
     for key in ("PYTHONHOME", "PYTHONPATH", "TCL_LIBRARY", "TK_LIBRARY", "QT_PLUGIN_PATH",
@@ -102,6 +151,16 @@ def clean_environment(python: Path | None = None, git: Path | None = None) -> di
     environment["PATH"] = os.pathsep.join(directories + [environment.get("PATH", "")])
     if python and python.parent.name.lower() == "scripts":
         environment["VIRTUAL_ENV"] = str(python.parent.parent)
+    # 仅作用于子进程：沿用环境变量或 Windows 系统的手动代理，不修改全局 Git 配置。
+    proxies = getproxies()
+    for scheme in ("http", "https"):
+        existing = environment.get(scheme + "_proxy") or environment.get(scheme.upper() + "_PROXY")
+        proxy = proxy_url or (proxies.get(scheme) if not existing else "")
+        if proxy:
+            if "://" not in proxy:
+                proxy = "http://" + proxy
+            environment[scheme + "_proxy"] = proxy
+            environment[scheme.upper() + "_PROXY"] = proxy
     return environment
 
 
@@ -117,10 +176,26 @@ def spawn(arguments: list[str], **kwargs) -> subprocess.Popen:
         previous = buffer.value
         kernel.SetDllDirectoryW(None)
     try:
-        return subprocess.Popen(arguments, creationflags=flags, **kwargs)
+        return subprocess.Popen(arguments, creationflags=kwargs.pop("creationflags", flags), **kwargs)
     finally:
         if kernel:
             kernel.SetDllDirectoryW(previous or None)
+
+
+def stop_process(process):
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        killer = spawn([str(Path(os.environ["SystemRoot"]) / "System32/taskkill.exe"),
+                        "/PID", str(process.pid), "/T", "/F"], stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            killer.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            killer.kill()
+    if process.poll() is None:
+        process.kill()
+    process.wait()
 
 
 class Bootstrap:
@@ -135,19 +210,22 @@ class Bootstrap:
         self.git = self.root / "runtime/git/cmd/git.exe"
         self.repo = child_path(self.root, config.repository_dir)
         self.environment_python = self.root / ".venv/Scripts/python.exe"
+        self.launched_pid = None
 
     def run(self, arguments, *, cwd=None, timeout=True, check=True) -> tuple[int, str]:
         if self.cancelled.is_set():
             raise InterruptedError("任务已取消")
         interpreter = self.environment_python if self.environment_python.exists() else self.python
         command = [str(arg) for arg in arguments]
+        if Path(command[0]).resolve() == self.git.resolve() and self.config.proxy_url:
+            command[1:1] = ["-c", "http.proxy=" + self.config.proxy_url]
         if cwd and Path(command[0]).resolve() == self.git.resolve():
             directory = Path(cwd).resolve()
             if directory == self.repo or (directory.parent == self.repo.parent and directory.name.startswith(".repository-clone-")):
                 # 只信任本次配置的安装仓库，不修改全局 safe.directory，不使用通配符。
                 command[1:1] = ["-c", "safe.directory=" + directory.as_posix()]
         process = spawn(command, cwd=str(cwd or self.root),
-                        env=clean_environment(interpreter, self.git), stdin=subprocess.DEVNULL,
+                        env=clean_environment(interpreter, self.git, self.config.proxy_url), stdin=subprocess.DEVNULL,
                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                         text=True, encoding="utf-8", errors="replace")
         lines = deque(maxlen=2000)
@@ -160,26 +238,16 @@ class Bootstrap:
         reader = threading.Thread(target=read_output, daemon=True)
         reader.start()
         started = time.monotonic()
+        limit = self.config.command_timeout if timeout is True else timeout
         try:
             while process.poll() is None:
                 if self.cancelled.is_set():
                     raise InterruptedError("任务已取消")
-                if timeout and time.monotonic() - started > self.config.command_timeout:
+                if limit and time.monotonic() - started > limit:
                     raise TimeoutError("命令执行超时，请检查网络后重试")
                 self.cancelled.wait(0.1)
         except BaseException:
-            if process.poll() is None:
-                if os.name == "nt":
-                    killer = spawn([str(Path(os.environ["SystemRoot"]) / "System32/taskkill.exe"),
-                                    "/PID", str(process.pid), "/T", "/F"], stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL)
-                    try:
-                        killer.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        killer.kill()
-                if process.poll() is None:
-                    process.kill()
-                process.wait()
+            stop_process(process)
             raise
         finally:
             reader.join(timeout=10)
@@ -234,10 +302,12 @@ class Bootstrap:
         if not branch or (self.config.branch and branch != self.config.branch):
             raise RuntimeError("当前分支与配置不同，或处于游离 HEAD，请先切换分支")
         try:
-            self.run([self.git, "fetch", "--prune", "origin"], cwd=self.repo)
+            self.run([self.git, "fetch", "--prune", "origin"], cwd=self.repo,
+                     timeout=self.config.update_timeout)
             self.run([self.git, "merge", "--ff-only", "refs/remotes/origin/" + branch], cwd=self.repo)
-        except (RuntimeError, TimeoutError) as error:
-            self.log(f"更新失败，保留已有版本继续运行：{error}")
+        except (RuntimeError, TimeoutError):
+            # Git 的详细输出已记录，避免把同一 fatal 再打印一遍。
+            self.log("自动更新暂时不可用，已保留本地版本并继续启动；可稍后检查网络或代理。")
         if (self.repo / ".gitmodules").is_file():
             self.run([self.git, "submodule", "update", "--init", "--recursive"], cwd=self.repo)
 
@@ -281,6 +351,59 @@ class Bootstrap:
         self.run(args, cwd=self.repo)
         self.run([self.environment_python, "-I", "-m", "pip", "check"], cwd=self.repo)
 
+    def start_application(self, entry: Path, application_args=()) -> int:
+        self.status("正在打开主程序")
+        logs = self.root / "logs"
+        logs.mkdir(exist_ok=True)
+        signal = logs / ("launch-ready-" + uuid.uuid4().hex + ".json")
+        token = uuid.uuid4().hex
+        log_path = logs / "application.log"
+        offset = log_path.stat().st_size if log_path.exists() else 0
+        options = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+        process = None
+        handed_off = False
+        try:
+            # 文件句柄由子进程继承，父启动器退出后输出仍可正常写入，不能使用 PIPE。
+            with log_path.open("ab", buffering=0) as output:
+                process = spawn([str(self.environment_python), "-u", "-c", APPLICATION_RUNNER,
+                                 str(entry), str(signal), token, *application_args],
+                                cwd=str(self.repo), env=clean_environment(self.environment_python, self.git, self.config.proxy_url),
+                                stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT, **options)
+            deadline = time.monotonic() + self.config.startup_timeout
+            while True:
+                if self.cancelled.is_set():
+                    raise InterruptedError("任务已取消")
+                code = process.poll()
+                if code is not None:
+                    if code:
+                        with log_path.open("rb") as error_log:
+                            error_log.seek(max(offset, log_path.stat().st_size - 4000))
+                            detail = error_log.read().decode("utf-8", errors="replace")
+                        raise RuntimeError(f"main.py 启动失败 ({code})，详细日志：{log_path}\n{detail}")
+                    handed_off = True
+                    self.log("主程序已正常完成，启动器即将退出。")
+                    return 0
+                if signal.exists():
+                    try:
+                        ready = json.loads(signal.read_text(encoding="utf-8"))
+                    except (ValueError, OSError):
+                        ready = {}
+                    if ready.get("token") == token:
+                        self.launched_pid = int(ready["pid"])
+                        (logs / "application.json").write_text(json.dumps({"pid": self.launched_pid, "entry": str(entry), "ready": True}), encoding="utf-8")
+                        handed_off = True
+                        self.log("主程序窗口已就绪，启动器即将退出；后续输出写入 logs/application.log。")
+                        self.status("主程序已启动")
+                        return 0
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"主程序窗口未在 {self.config.startup_timeout} 秒内打开，请查看 {log_path}")
+                self.cancelled.wait(0.1)
+        finally:
+            if process is not None and not handed_off:
+                stop_process(process)
+            signal.unlink(missing_ok=True)
+            signal.with_suffix(".tmp").unlink(missing_ok=True)
+
     def start(self, *, prepare_only=False, application_args=()) -> int:
         self.check_environment()
         self.sync_repository()
@@ -291,11 +414,7 @@ class Bootstrap:
         if prepare_only:
             self.status("环境和仓库已准备完成")
             return 0
-        self.status("程序运行中，关闭启动器将结束程序")
-        code, _ = self.run([self.environment_python, "-u", entry, *application_args], cwd=self.repo,
-                           timeout=False, check=False)
-        self.status(f"程序已退出，退出码 {code}")
-        return code
+        return self.start_application(entry, application_args)
 
 
 def gui(root: Path, config: Config, logger: logging.Logger, args) -> int:
@@ -328,7 +447,10 @@ def gui(root: Path, config: Config, logger: logging.Logger, args) -> int:
         try:
             engine = Bootstrap(root, config, log, lambda text: messages.put(("state", text)), cancelled)
             code = engine.start(prepare_only=args.prepare_only, application_args=args.application_args)
-            messages.put(("state", "准备完成" if args.prepare_only else f"程序已退出（{code}）"))
+            if code == 0 and not args.prepare_only:
+                messages.put(("launched", ""))
+            else:
+                messages.put(("state", "准备完成"))
         except Exception as error:
             log(str(error))
             messages.put(("state", "已取消" if isinstance(error, InterruptedError) else "启动失败，请查看日志后重试"))
@@ -348,7 +470,7 @@ def gui(root: Path, config: Config, logger: logging.Logger, args) -> int:
         nonlocal closing
         if working:
             closing = True
-            state.set("正在结束程序…")
+            state.set("正在取消启动…")
             cancelled.set()
         else:
             window.destroy()
@@ -369,6 +491,9 @@ def gui(root: Path, config: Config, logger: logging.Logger, args) -> int:
                 output.configure(state="disabled")
             elif kind == "state":
                 state.set(text)
+            elif kind == "launched":
+                window.destroy()
+                return
             elif kind == "done":
                 working = False
                 retry.configure(state="normal")
@@ -379,7 +504,7 @@ def gui(root: Path, config: Config, logger: logging.Logger, args) -> int:
 
     retry = ttk.Button(buttons, text="重新启动", command=launch)
     retry.pack(side="right")
-    ttk.Button(buttons, text="取消 / 结束程序", command=cancelled.set).pack(side="right", padx=8)
+    ttk.Button(buttons, text="取消启动", command=cancelled.set).pack(side="right", padx=8)
     ttk.Button(buttons, text="查看日志", command=lambda: os.startfile(root / "logs")).pack(side="left")
     window.protocol("WM_DELETE_WINDOW", close)
     window.after(100, poll)
@@ -418,6 +543,8 @@ def main(argv=None) -> int:
                 Bootstrap(root, config, log).check_environment()
                 log("便携 Python 和 Git 检查通过")
                 return 0
+            with instance_lock(root, "application.lock"):
+                pass
             if args.headless:
                 return Bootstrap(root, config, log, log).start(
                     prepare_only=args.prepare_only, application_args=args.application_args)

@@ -146,6 +146,6 @@ python -m pip install "pyinstaller>=6,<7" "zstandard>=0.22,<1"
 python tools/build_installer.py
 ```
 
-也可双击 `build.bat`。输出 `dist/PluginManager-2.1.0-Setup-x64.exe`；目录版为 `dist/PluginManager/`。最终用户无需预装 Python、Git，也无需运行下载脚本。
+也可双击 `build.bat`。输出 `dist/PluginManager-2.1.1-Setup-x64.exe`；目录版为 `dist/PluginManager/`。最终用户无需预装 Python、Git，也无需运行下载脚本。
 
 源码开发仍使用 `python main.py`。完整目录、仓库配置、更新与卸载说明见 [BOOTSTRAP.md](BOOTSTRAP.md)。

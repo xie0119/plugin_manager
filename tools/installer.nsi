@@ -13,10 +13,10 @@ SetCompressor /SOLID lzma
 SetCompressorDictSize 32
 ShowInstDetails show
 ShowUninstDetails show
-VIProductVersion "2.1.0.0"
+VIProductVersion "2.1.1.0"
 VIAddVersionKey /LANG=2052 "ProductName" "PluginManager"
 VIAddVersionKey /LANG=2052 "FileDescription" "PluginManager 启动器与便携 Python/Git 安装程序"
-VIAddVersionKey /LANG=2052 "FileVersion" "2.1.0"
+VIAddVersionKey /LANG=2052 "FileVersion" "2.1.1"
 VIAddVersionKey /LANG=2052 "LegalCopyright" "PluginManager"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TEXT "安装程序将释放启动器、便携 Python 和 Git。$\r$\n$\r$\n安装后打开启动器，会将仓库克隆到安装路径，安装项目依赖并运行 main.py。$\r$\n$\r$\n安装阶段无需下载 Python 或 Git；首次拉取仓库和安装依赖需要联网。"
@@ -31,10 +31,18 @@ VIAddVersionKey /LANG=2052 "LegalCopyright" "PluginManager"
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
 !macro CheckClosed suffix
-  IfFileExists "$INSTDIR\launcher.lock" 0 closed_${suffix}
+  IfFileExists "$INSTDIR\launcher.lock" 0 application_${suffix}
   System::Call 'kernel32::CreateFileW(w "$INSTDIR\launcher.lock", i 0xC0000000, i 0, p 0, i 3, i 0, p 0) p .r0'
   ${If} $0 == -1
     MessageBox MB_ICONSTOP "请先关闭此目录中的 PluginManager，再继续安装或卸载。"
+    Abort
+  ${EndIf}
+  System::Call 'kernel32::CloseHandle(p r0)'
+  application_${suffix}:
+  IfFileExists "$INSTDIR\application.lock" 0 closed_${suffix}
+  System::Call 'kernel32::CreateFileW(w "$INSTDIR\application.lock", i 0xC0000000, i 0, p 0, i 3, i 0, p 0) p .r0'
+  ${If} $0 == -1
+    MessageBox MB_ICONSTOP "请先关闭主程序，再继续安装或卸载。"
     Abort
   ${EndIf}
   System::Call 'kernel32::CloseHandle(p r0)'
@@ -75,7 +83,7 @@ Section "PluginManager"
   CreateShortcut "$DESKTOP\PluginManager.lnk" "$INSTDIR\PluginManager.exe"
   WriteRegStr HKCU "Software\PluginManagerBootstrap" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PluginManagerBootstrap" "DisplayName" "PluginManager 启动器"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PluginManagerBootstrap" "DisplayVersion" "2.1.0"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PluginManagerBootstrap" "DisplayVersion" "2.1.1"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PluginManagerBootstrap" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PluginManagerBootstrap" "DisplayIcon" "$INSTDIR\PluginManager.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PluginManagerBootstrap" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'

@@ -1,27 +1,23 @@
-# 安装式启动器验证
+# 启动器 2.1.1 验证记录
 
-已在当前 Windows 工程生成 `dist/PluginManager-2.1.0-Setup-x64.exe`，42,830,720 字节。
+安装包：dist/PluginManager-2.1.1-Setup-x64.exe
+大小：43017365 字节
+SHA256：b2b519822530675959edbad910eb3c4618877bc4ee4167cca7b26b316c2198ef
 
-SHA256：`98b5e1e7cff4b6b58bb8874e1bab93f8a618d557d4c43a004597296e16c79154`。
+已验证：
 
-验证结果：
+- 8 项生命周期测试通过：启动失败、正常完成、启动超时、取消、更新超时、旧配置兼容和代理隔离。
+- 使用真实仓库与 PySide6，创建主窗口后启动器 GUI 自动退出。
+- 启动器退出时主程序进程仍存活，且退出后仍能继续写 application.log。
+- 显式使用不可达代理模拟自动更新失败；成功回退本地并完成上述界面启动。
+- 移除系统 Python/Git 的 PATH 后，用内置环境完成真实仓库克隆和依赖安装。
+- 安装包解出的 4727 个文件逐项 SHA256 一致，解包后的启动器环境检查通过。
+- Python 语法检查和 git diff --check 通过。
 
-| 检查 | 结果 |
-| --- | --- |
-| 只编译 start.py，PyInstaller onedir，不编译业务界面 | 通过 |
-| 9 项启动器单元测试：路径、配置、环境隔离、并发锁、取消、失败处理等 | 通过 |
-| 移除测试进程系统 Python/Git 的 PATH，运行已编译启动器 | 通过 |
-| 便携 Python / SSL / venv / ensurepip / Tk / Git 校验 | 通过 |
-| 实际克隆指定 GitHub 仓库 | 通过 |
-| 在独立 .venv 安装真实 requirements.txt | 通过 |
-| 重复启动、复用独立环境 | 通过 |
-| 实际 main.py 的 Qt 主窗口离屏创建、事件循环、正常退出 | 通过，退出码 0 |
-| 实际安装包解包，4722 个内置文件逐项 SHA256 核对 | 通过 |
-| 从安装包解出的启动器检查其便携 Python/Git | 通过 |
-| 从固定 SHA256 的 NSIS x64 包重新解压构建编译器 | 通过 |
+验证仓库提交：2b06d2d4cd74a771df3150bc9bdee716d2cdb643
 
-目标仓库验证提交：`5f7999911e7b165a3ac9edf34246af5a958ef420`。
+自动更新默认只等待 5 秒。GitHub 本身不可达时，仍无法获取新版本；此时本地代码和依赖完整即可继续使用。proxy_url 默认留空，支持现有环境变量及 Windows 手动代理，不强制用户配置代理。
 
-机器可读记录位于 `dist/smoke-report.json`、`dist/verification-report.json` 和 `dist/installer-info.json`。离屏测试使用独立目录中的临时探针调用真实 main.py，并在主窗口创建后退出；没有修改业务入口源码。
+应用窗口就绪后，业务输出写入 logs/application.log；准备过程写入 logs/start.log。应用通过单独的 application.lock 保持单实例。
 
-未执行系统级安装、桌面快捷方式注册或卸载测试。实际安装包的文件释放结果通过解包逐项核验，启动器业务流程在 Windows 上实测通过。
+未执行系统级安装/卸载操作；文件释放通过实际安装包解包核验。机器可读记录见 dist/smoke-report.json、dist/verification-report.json、dist/installer-info.json。
