@@ -17,7 +17,7 @@
   logs/start.log               日志
 ```
 
-用户直接安装 `PluginManager-2.1.1-Setup-x64.exe`，不需要安装 Python、Git 或执行下载脚本，也不依赖额外 .NET 安装。安装时不下载 Python/Git，不修改系统 PATH。打开启动器后联网克隆仓库、安装依赖，再使用 `.venv/Scripts/python.exe` 运行 `repository/main.py`，工作目录设为仓库根目录。
+用户直接安装 `PluginManager-2.1.3-Setup-x64.exe`，不需要安装 Python、Git 或执行下载脚本，也不依赖额外 .NET 安装。安装时不下载 Python/Git，不修改系统 PATH。打开启动器后联网克隆仓库、安装依赖，再使用 `.venv/Scripts/pythonw.exe` 运行 `repository/main.py`，工作目录设为仓库根目录。
 
 默认仓库为 `https://github.com/xie0119/plugin_manager.git`，分支跟随仓库 HEAD。可修改 `launcher-config.json`。本版不嵌入账号密码、不提供登录输入，沿用现有 Git 配置和凭据。
 
@@ -35,7 +35,7 @@ python tools/build_release.py
 python tools/build_installer.py --skip-build
 ```
 
-也可直接 `python tools/build_installer.py` 自动完成两步。安装包输出为 `dist/PluginManager-2.1.1-Setup-x64.exe`；目录版为 `dist/PluginManager/`。`python tools/build_release.py --zip` 可额外生成便携 ZIP。
+也可直接 `python tools/build_installer.py` 自动完成两步。安装包输出为 `dist/PluginManager-2.1.3-Setup-x64.exe`；目录版为 `dist/PluginManager/`。`python tools/build_release.py --zip` 可额外生成便携 ZIP。
 
 只有构建阶段下载官方 CPython MSI、MinGit ZIP 和 NSIS 的 MSYS2 原生 x64 发行包，验证固定 SHA256，缓存在 `build/downloads`。CPython 通过只读 MSI 数据库 API 和系统 CAB 提取工具展开，不调用安装服务、不注册系统 Python。NSIS 解压使用，不安装完整 MSYS2，不安装到系统。
 
@@ -51,3 +51,7 @@ python start.py --headless --prepare-only --install-dir dist/PluginManager
 保留各组件原始许可证：Python 来源为 python.org，Git 来源为 git-for-windows/git Release，NSIS 原生编译器来源为 MSYS2 官方软件仓库。业务插件所需额外依赖和外部程序仍需由仓库声明。
 
 自动更新最多等待 update_timeout（默认 5 秒），超时或连接失败直接回退本地代码；不重复输出同一错误。startup_timeout 默认 60 秒，用于等待主窗口就绪。proxy_url 默认留空，沿用环境变量及 Windows 手动代理；需要时可填 HTTP/HTTPS 代理地址。首次没有本地仓库时仍必须联网，启动器不能修复网络本身的不可达。
+
+启动器使用 Windows GUI 子系统；业务界面使用 pythonw.exe 运行。Git、pip 和环境检查子进程统一使用 CREATE_NO_WINDOW，不创建黑色控制台窗口。业务输出仍写入 logs/application.log。
+
+标题行右侧提供“重置插件”。点击后先停止当前准备任务，再重新克隆配置的仓库；克隆和入口校验成功才替换旧目录。旧仓库（含自定义插件和设置）移入 repository-backups/，失败不清空旧目录。重置成功后继续安装依赖并启动主程序。准备期间不并发运行重置；取消或关闭可终止准备。也可使用 --reset-plugins --prepare-only 仅重拉并准备依赖。

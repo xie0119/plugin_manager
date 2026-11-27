@@ -13,10 +13,10 @@ SetCompressor /SOLID lzma
 SetCompressorDictSize 32
 ShowInstDetails show
 ShowUninstDetails show
-VIProductVersion "2.1.1.0"
+VIProductVersion "2.1.3.0"
 VIAddVersionKey /LANG=2052 "ProductName" "PluginManager"
 VIAddVersionKey /LANG=2052 "FileDescription" "PluginManager 启动器与便携 Python/Git 安装程序"
-VIAddVersionKey /LANG=2052 "FileVersion" "2.1.1"
+VIAddVersionKey /LANG=2052 "FileVersion" "2.1.3"
 VIAddVersionKey /LANG=2052 "LegalCopyright" "PluginManager"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TEXT "安装程序将释放启动器、便携 Python 和 Git。$\r$\n$\r$\n安装后打开启动器，会将仓库克隆到安装路径，安装项目依赖并运行 main.py。$\r$\n$\r$\n安装阶段无需下载 Python 或 Git；首次拉取仓库和安装依赖需要联网。"
@@ -83,7 +83,7 @@ Section "PluginManager"
   CreateShortcut "$DESKTOP\PluginManager.lnk" "$INSTDIR\PluginManager.exe"
   WriteRegStr HKCU "Software\PluginManagerBootstrap" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PluginManagerBootstrap" "DisplayName" "PluginManager 启动器"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PluginManagerBootstrap" "DisplayVersion" "2.1.1"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PluginManagerBootstrap" "DisplayVersion" "2.1.3"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PluginManagerBootstrap" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PluginManagerBootstrap" "DisplayIcon" "$INSTDIR\PluginManager.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PluginManagerBootstrap" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'

@@ -7,5 +7,6 @@ build/
 dist/
 *.egg-info/
 backups/
+repository-backups/
 plugins/*/settings.json
 plugins/*/settings.json.tmp

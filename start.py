@@ -21,13 +21,15 @@ import uuid
 from urllib.parse import urlsplit
 from urllib.request import getproxies
 
-VERSION = "2.1.1"
+VERSION = "2.1.3"
 
 # 在子进程自己的 GUI 线程确认窗口就绪，不修改拉取的业务源码。
 APPLICATION_RUNNER = r'''
 import json, os, runpy, sys
 from pathlib import Path
 entry, signal, token = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+if sys.stdout is None or sys.stderr is None:
+    sys.stdout = sys.stderr = (signal.parent / "application.log").open("a", encoding="utf-8", buffering=1)
 sys.argv = [str(entry), *sys.argv[4:]]
 sys.path.insert(0, str(entry.parent))
 lock = (signal.parent.parent / "application.lock").open("a+b")
@@ -103,7 +105,7 @@ class Config:
         if config.proxy_url and urlsplit(config.proxy_url).scheme not in {"http", "https"}:
             raise ValueError("proxy_url 需要 HTTP 或 HTTPS 代理地址")
         repo = child_path(root, config.repository_dir)
-        if repo.parts[len(root.resolve().parts)].lower() in {"runtime", "_internal", ".venv", "logs", "tools", "launcher"}:
+        if repo.parts[len(root.resolve().parts)].lower() in {"runtime", "_internal", ".venv", "logs", "tools", "launcher", "repository-backups"}:
             raise ValueError("仓库目录与启动器目录冲突")
         child_path(repo, config.entry_point)
         if config.requirements_file:
@@ -166,7 +168,10 @@ def clean_environment(python: Path | None = None, git: Path | None = None,
 
 def spawn(arguments: list[str], **kwargs) -> subprocess.Popen:
     """冻结后的父进程会设置 DLL 搜索目录；启动子进程时恢复系统默认。"""
-    flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    flags = kwargs.pop("creationflags", 0)
+    if os.name == "nt":
+        # DETACHED_PROCESS 会让 CREATE_NO_WINDOW 失效；统一使用无控制台模式。
+        flags = (flags & ~subprocess.DETACHED_PROCESS) | subprocess.CREATE_NO_WINDOW
     previous = None
     kernel = None
     if os.name == "nt" and getattr(sys, "frozen", False):
@@ -176,7 +181,7 @@ def spawn(arguments: list[str], **kwargs) -> subprocess.Popen:
         previous = buffer.value
         kernel.SetDllDirectoryW(None)
     try:
-        return subprocess.Popen(arguments, creationflags=kwargs.pop("creationflags", flags), **kwargs)
+        return subprocess.Popen(arguments, creationflags=flags, **kwargs)
     finally:
         if kernel:
             kernel.SetDllDirectoryW(previous or None)
@@ -211,6 +216,7 @@ class Bootstrap:
         self.repo = child_path(self.root, config.repository_dir)
         self.environment_python = self.root / ".venv/Scripts/python.exe"
         self.launched_pid = None
+        self.application_process = None
 
     def run(self, arguments, *, cwd=None, timeout=True, check=True) -> tuple[int, str]:
         if self.cancelled.is_set():
@@ -265,26 +271,87 @@ class Bootstrap:
         self.run([self.python, "-I", "-c", "import sys,ssl,venv,ensurepip; print(sys.version)"])
         self.run([self.git, "--version"])
 
+    def _clone_into(self, destination: Path) -> None:
+        args = [self.git, "clone", "--progress"]
+        if self.config.branch:
+            args += ["--branch", self.config.branch]
+        self.run(args + ["--", self.config.repository_url, destination])
+        if (destination / ".gitmodules").is_file():
+            self.run([self.git, "submodule", "update", "--init", "--recursive"], cwd=destination)
+
+    def _remove_temporary_clone(self, path: Path) -> None:
+        if not path.exists():
+            return
+        if (path.is_symlink() or getattr(path, "is_junction", lambda: False)() or
+                path.resolve().parent != self.repo.parent or not path.name.startswith(".repository-clone-")):
+            raise ValueError("临时克隆清理路径越界")
+        def writable(function, filename, exc_info):
+            os.chmod(filename, 0o700)
+            function(filename)
+        shutil.rmtree(path, onerror=writable)
+
+    def _move_owned_directory(self, source: Path, destination: Path) -> None:
+        for path in (source, destination):
+            if (path.is_symlink() or getattr(path, "is_junction", lambda: False)() or
+                    path.resolve() == self.root or not path.resolve().is_relative_to(self.root)):
+                raise ValueError("仓库移动路径越界或为目录链接")
+        if destination.exists():
+            raise FileExistsError(destination)
+        source.rename(destination)
+
+    def reset_repository(self) -> Path | None:
+        """先完整克隆，再备份旧目录并切换；网络失败不会删除现有插件或设置。"""
+        self.status("正在重置插件，重新拉取仓库")
+        original = self.root / self.config.repository_dir
+        if original.is_symlink() or getattr(original, "is_junction", lambda: False)():
+            raise ValueError("仓库目录不能是目录链接")
+        if self.repo.exists() and not self.repo.is_dir():
+            raise ValueError("仓库路径已被文件占用")
+        with instance_lock(self.root, "application.lock"):
+            self.repo.parent.mkdir(parents=True, exist_ok=True)
+            staging = Path(tempfile.mkdtemp(prefix=".repository-clone-", dir=self.repo.parent))
+            backup = None
+            switched = False
+            try:
+                self._clone_into(staging)
+                if not child_path(staging, self.config.entry_point).is_file():
+                    raise FileNotFoundError("新仓库缺少程序入口，原仓库未替换")
+                if self.cancelled.is_set():
+                    raise InterruptedError("重置已取消，原仓库未替换")
+                if self.repo.exists():
+                    backup_root = self.root / "repository-backups"
+                    if backup_root.is_symlink() or getattr(backup_root, "is_junction", lambda: False)():
+                        raise ValueError("备份目录不能是目录链接")
+                    backup_root.mkdir(exist_ok=True)
+                    backup = child_path(self.root, "repository-backups/" + self.repo.name + "-" +
+                                        time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8])
+                    self._move_owned_directory(self.repo, backup)
+                try:
+                    self._move_owned_directory(staging, self.repo)
+                except BaseException:
+                    if backup is not None and backup.exists() and not self.repo.exists():
+                        self._move_owned_directory(backup, self.repo)
+                    raise
+                switched = True
+                if backup is not None:
+                    self.log(f"原仓库及插件设置已备份：{backup}")
+                self.log("插件仓库已重新拉取，接下来安装依赖并启动主程序。")
+                return backup
+            finally:
+                if not switched:
+                    self.log("重置未完成，原仓库已保留。")
+                self._remove_temporary_clone(staging)
+
     def sync_repository(self) -> None:
         self.status("拉取业务仓库")
         if not self.repo.exists():
             self.repo.parent.mkdir(parents=True, exist_ok=True)
             staging = Path(tempfile.mkdtemp(prefix=".repository-clone-", dir=self.repo.parent))
             try:
-                args = [self.git, "clone", "--progress"]
-                if self.config.branch:
-                    args += ["--branch", self.config.branch]
-                self.run(args + ["--", self.config.repository_url, staging])
-                if (staging / ".gitmodules").is_file():
-                    self.run([self.git, "submodule", "update", "--init", "--recursive"], cwd=staging)
+                self._clone_into(staging)
                 staging.rename(self.repo)
             finally:
-                if staging.exists():
-                    # 仅清理本次创建的临时克隆，不触碰已有仓库。
-                    def writable(function, path, exc_info):
-                        os.chmod(path, 0o700)
-                        function(path)
-                    shutil.rmtree(staging, onerror=writable)
+                self._remove_temporary_clone(staging)
             return
         if not (self.repo / ".git").is_dir():
             raise RuntimeError(f"目标目录已存在但不是 Git 仓库，不会覆盖：{self.repo}")
@@ -317,7 +384,8 @@ class Bootstrap:
         marker = environment / "launcher-owned.json"
         _, version = self.run([self.python, "-I", "-c", "import sys; print(sys.version)"])
         identity = {"python": str(self.python), "version": version.strip()}
-        healthy = self.environment_python.exists() and marker.exists()
+        healthy = (self.environment_python.exists() and marker.exists() and
+                   (os.name != "nt" or self.environment_python.with_name("pythonw.exe").is_file()))
         if healthy:
             try:
                 healthy = json.loads(marker.read_text(encoding="utf-8")) == identity
@@ -359,16 +427,22 @@ class Bootstrap:
         token = uuid.uuid4().hex
         log_path = logs / "application.log"
         offset = log_path.stat().st_size if log_path.exists() else 0
-        options = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+        interpreter = self.environment_python
+        if os.name == "nt":
+            interpreter = interpreter.with_name("pythonw.exe")
+            if not interpreter.is_file():
+                raise FileNotFoundError(f"缺少无控制台解释器，请重新创建独立环境：{interpreter}")
+        options = {"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
         process = None
         handed_off = False
         try:
             # 文件句柄由子进程继承，父启动器退出后输出仍可正常写入，不能使用 PIPE。
             with log_path.open("ab", buffering=0) as output:
-                process = spawn([str(self.environment_python), "-u", "-c", APPLICATION_RUNNER,
+                process = spawn([str(interpreter), "-u", "-c", APPLICATION_RUNNER,
                                  str(entry), str(signal), token, *application_args],
                                 cwd=str(self.repo), env=clean_environment(self.environment_python, self.git, self.config.proxy_url),
                                 stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT, **options)
+                self.application_process = process
             deadline = time.monotonic() + self.config.startup_timeout
             while True:
                 if self.cancelled.is_set():
@@ -404,9 +478,12 @@ class Bootstrap:
             signal.unlink(missing_ok=True)
             signal.with_suffix(".tmp").unlink(missing_ok=True)
 
-    def start(self, *, prepare_only=False, application_args=()) -> int:
+    def start(self, *, prepare_only=False, application_args=(), reset_plugins=False) -> int:
         self.check_environment()
-        self.sync_repository()
+        if reset_plugins:
+            self.reset_repository()
+        else:
+            self.sync_repository()
         entry = child_path(self.repo, self.config.entry_point)
         if not entry.is_file():
             raise FileNotFoundError(f"仓库缺少程序入口：{entry}")
@@ -427,7 +504,10 @@ def gui(root: Path, config: Config, logger: logging.Logger, args) -> int:
     window.minsize(640, 400)
     frame = ttk.Frame(window, padding=20)
     frame.pack(fill="both", expand=True)
-    ttk.Label(frame, text="PluginManager", font=("Microsoft YaHei UI", 20, "bold")).pack(anchor="w")
+    header = ttk.Frame(frame)
+    header.pack(fill="x")
+    ttk.Label(header, text="PluginManager", font=("Microsoft YaHei UI", 20, "bold")).pack(side="left")
+    ttk.Style(window).configure("Reset.TButton", font=("Microsoft YaHei UI", 10), padding=(12, 6))
     state = tk.StringVar(value="准备启动")
     ttk.Label(frame, textvariable=state).pack(anchor="w", pady=(12, 8))
     output = scrolledtext.ScrolledText(frame, wrap="word", state="disabled", font=("Consolas", 10))
@@ -438,15 +518,24 @@ def gui(root: Path, config: Config, logger: logging.Logger, args) -> int:
     cancelled = threading.Event()
     working = False
     closing = False
+    pending_reset = False
+    active_engine = None
+    active_thread = None
+    launch_succeeded = False
 
     def log(text):
         logger.info(text)
         messages.put(("log", text))
 
-    def worker():
+    def worker(reset=False, previous_engine=None):
+        nonlocal active_engine
         try:
+            if reset and previous_engine is not None and previous_engine.application_process is not None:
+                stop_process(previous_engine.application_process)
             engine = Bootstrap(root, config, log, lambda text: messages.put(("state", text)), cancelled)
-            code = engine.start(prepare_only=args.prepare_only, application_args=args.application_args)
+            active_engine = engine
+            code = engine.start(prepare_only=args.prepare_only, application_args=args.application_args,
+                                reset_plugins=reset)
             if code == 0 and not args.prepare_only:
                 messages.put(("launched", ""))
             else:
@@ -457,17 +546,36 @@ def gui(root: Path, config: Config, logger: logging.Logger, args) -> int:
         finally:
             messages.put(("done", ""))
 
-    def launch():
-        nonlocal working
+    def launch(reset=False):
+        nonlocal working, active_thread, launch_succeeded
         if working:
             return
         working = True
+        launch_succeeded = False
         cancelled.clear()
         retry.configure(state="disabled")
-        threading.Thread(target=worker, daemon=True).start()
+        reset_button.configure(state="disabled" if reset else "normal", text="重置中…" if reset else "重置插件")
+        active_thread = threading.Thread(target=worker, args=(reset, active_engine), daemon=True)
+        active_thread.start()
+
+    def request_reset():
+        nonlocal pending_reset
+        if working:
+            pending_reset = True
+            reset_button.configure(state="disabled", text="等待重置…")
+            state.set("正在停止当前任务，准备重置插件…")
+            cancelled.set()
+        else:
+            launch(reset=True)
+
+    def cancel_current():
+        nonlocal pending_reset
+        pending_reset = False
+        cancelled.set()
 
     def close():
-        nonlocal closing
+        nonlocal closing, pending_reset
+        pending_reset = False
         if working:
             closing = True
             state.set("正在取消启动…")
@@ -476,7 +584,7 @@ def gui(root: Path, config: Config, logger: logging.Logger, args) -> int:
             window.destroy()
 
     def poll():
-        nonlocal working
+        nonlocal working, pending_reset, launch_succeeded, active_engine
         for _ in range(200):
             try:
                 kind, text = messages.get_nowait()
@@ -490,25 +598,37 @@ def gui(root: Path, config: Config, logger: logging.Logger, args) -> int:
                 output.see("end")
                 output.configure(state="disabled")
             elif kind == "state":
-                state.set(text)
+                if not pending_reset:
+                    state.set(text)
             elif kind == "launched":
-                window.destroy()
-                return
+                launch_succeeded = True
             elif kind == "done":
+                # 先让工作线程结束，再释放子进程句柄和 Tk 窗口，避免退出时清理竞态。
+                if active_thread is not None:
+                    active_thread.join()
                 working = False
                 retry.configure(state="normal")
-                if closing:
+                reset_button.configure(state="normal", text="重置插件")
+                if closing or (launch_succeeded and not pending_reset):
+                    if active_engine is not None:
+                        active_engine.application_process = None
+                    active_engine = None
                     window.destroy()
                     return
+                if pending_reset:
+                    pending_reset = False
+                    launch(reset=True)
         window.after(100, poll)
 
+    reset_button = ttk.Button(header, text="重置插件", command=request_reset, width=12, style="Reset.TButton")
+    reset_button.pack(side="right")
     retry = ttk.Button(buttons, text="重新启动", command=launch)
     retry.pack(side="right")
-    ttk.Button(buttons, text="取消启动", command=cancelled.set).pack(side="right", padx=8)
+    ttk.Button(buttons, text="取消启动", command=cancel_current).pack(side="right", padx=8)
     ttk.Button(buttons, text="查看日志", command=lambda: os.startfile(root / "logs")).pack(side="left")
     window.protocol("WM_DELETE_WINDOW", close)
     window.after(100, poll)
-    window.after(150, launch)
+    window.after(150, lambda: launch(reset=getattr(args, "reset_plugins", False)))
     window.mainloop()
     return 0
 
@@ -519,6 +639,7 @@ def main(argv=None) -> int:
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--check-environment", action="store_true")
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument("--reset-plugins", action="store_true", help="备份原仓库后重新克隆插件仓库")
     parser.add_argument("application_args", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     if args.application_args[:1] == ["--"]:
@@ -547,7 +668,8 @@ def main(argv=None) -> int:
                 pass
             if args.headless:
                 return Bootstrap(root, config, log, log).start(
-                    prepare_only=args.prepare_only, application_args=args.application_args)
+                    prepare_only=args.prepare_only, application_args=args.application_args,
+                    reset_plugins=args.reset_plugins)
             return gui(root, config, logger, args)
     except Exception as error:
         logger.exception("启动失败")

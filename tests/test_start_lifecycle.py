@@ -66,6 +66,12 @@ class LifecycleTests(unittest.TestCase):
             self.engine.run([sys.executable, "-c", "import time;time.sleep(30)"], timeout=0.3)
         self.assertLess(time.monotonic() - began, 5)
 
+    @unittest.skipUnless(os.name == "nt", "Windows console visibility")
+    def test_preparation_child_has_no_console_window(self):
+        code, output = self.engine.run([sys.executable, "-c", "import ctypes; print(ctypes.windll.kernel32.GetConsoleWindow())"])
+        self.assertEqual(code, 0)
+        self.assertEqual(output.strip(), "0")
+
     def test_update_timeout_preserves_local_start(self):
         (self.engine.repo / ".git").mkdir()
         calls = []

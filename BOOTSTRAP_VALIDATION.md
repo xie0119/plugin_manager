@@ -1,23 +1,22 @@
-# 启动器 2.1.1 验证记录
+# 启动器 2.1.3 验证记录
 
-安装包：dist/PluginManager-2.1.1-Setup-x64.exe
-大小：43017365 字节
-SHA256：b2b519822530675959edbad910eb3c4618877bc4ee4167cca7b26b316c2198ef
+安装包：dist/PluginManager-2.1.3-Setup-x64.exe
+大小：43011482 字节
+SHA256：5552ab8b05e02bdf6b9ba17820f2eb8593079a8539b04f049b56fe5c09c63288
 
-已验证：
+- 16 项仓库重置、界面交互、启动生命周期和无控制台测试通过。
+- “重置插件”按钮位于启动器 PluginManager 标题同行最右侧；准备中点击会先取消当前任务，再执行重置。
+- 重置先克隆并验证新仓库，再将原仓库完整移入 repository-backups，最后切换新仓库。克隆失败保留原仓库，切换失败恢复备份。
+- 使用编译后的启动器实际执行重置，验证本地新增文件保留在备份中，新仓库没有该文件。
+- 从 PATH 移除系统 Python、Git 后，便携环境检查、真实仓库克隆、依赖安装及主程序窗口检查通过。
+- PluginManager.exe 和运行主程序的 .venv/Scripts/pythonw.exe 均为 Windows GUI 子系统；实际主程序 GetConsoleWindow() 为 0，没有控制台窗口。
+- 实测主程序就绪后启动器自动退出，main.py 继续运行并可继续写日志。
+- 模拟自动更新网络不可达，仍可回退本地版本并完成主程序启动。
+- 从最终安装包解出 4727 个文件，逐个 SHA256 校验通过，解出的启动器环境检查通过。
+- 业务主程序保持源码，未编译 PySide6 业务界面。安装包和绿色版目录均已更新。
 
-- 8 项生命周期测试通过：启动失败、正常完成、启动超时、取消、更新超时、旧配置兼容和代理隔离。
-- 使用真实仓库与 PySide6，创建主窗口后启动器 GUI 自动退出。
-- 启动器退出时主程序进程仍存活，且退出后仍能继续写 application.log。
-- 显式使用不可达代理模拟自动更新失败；成功回退本地并完成上述界面启动。
-- 移除系统 Python/Git 的 PATH 后，用内置环境完成真实仓库克隆和依赖安装。
-- 安装包解出的 4727 个文件逐项 SHA256 一致，解包后的启动器环境检查通过。
-- Python 语法检查和 git diff --check 通过。
+目标仓库提交：9293f2fd7a770713774f5c15a397851ed5ea5703
 
-验证仓库提交：2b06d2d4cd74a771df3150bc9bdee716d2cdb643
+业务日志写入 logs/application.log；准备日志写入 logs/start.log。自动更新默认 5 秒超时，失败使用本地代码。
 
-自动更新默认只等待 5 秒。GitHub 本身不可达时，仍无法获取新版本；此时本地代码和依赖完整即可继续使用。proxy_url 默认留空，支持现有环境变量及 Windows 手动代理，不强制用户配置代理。
-
-应用窗口就绪后，业务输出写入 logs/application.log；准备过程写入 logs/start.log。应用通过单独的 application.lock 保持单实例。
-
-未执行系统级安装/卸载操作；文件释放通过实际安装包解包核验。机器可读记录见 dist/smoke-report.json、dist/verification-report.json、dist/installer-info.json。
+未执行系统级安装/卸载操作。机器可读验证结果位于 dist/smoke-report.json、dist/verification-report.json、dist/installer-info.json。

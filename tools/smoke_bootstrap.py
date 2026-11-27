@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import ctypes
 import time
+import struct
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -19,6 +20,7 @@ def main():
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--gui", action="store_true", help="同时验证启动器窗口自动关闭")
     parser.add_argument("--offline-update", action="store_true", help="模拟更新无法连接，验证本地回退")
+    parser.add_argument("--reset-plugins", action="store_true", help="验证真实仓库重拉和原目录备份")
     args = parser.parse_args()
     target = args.directory.resolve()
     boundary = (ROOT / "build").resolve()
@@ -33,6 +35,11 @@ def main():
     else:
         shutil.copytree(ROOT / "dist/PluginManager", target)
     executable = target / "PluginManager.exe"
+    def gui_subsystem(path):
+        data = path.read_bytes()
+        offset = struct.unpack_from("<I", data, 0x3c)[0]
+        return struct.unpack_from("<H", data, offset + 24 + 68)[0]
+    assert gui_subsystem(executable) == 2, "启动器 EXE 必须使用 GUI 子系统"
     environment = os.environ.copy()
     environment["PATH"] = os.pathsep.join([str(Path(os.environ["SystemRoot"]) / "System32"), os.environ["SystemRoot"]])
     environment["QT_QPA_PLATFORM"] = "offscreen"
@@ -56,10 +63,22 @@ def main():
     original = config_path.read_text(encoding="utf-8")
     config = json.loads(original)
     repo = target / config["repository_dir"]
+    if args.reset_plugins:
+        marker = repo / "_local_reset_probe.txt"
+        marker.write_text("KEEP_IN_BACKUP", encoding="utf-8")
+        backup_root = target / "repository-backups"
+        before = set(backup_root.iterdir()) if backup_root.exists() else set()
+        print("Resetting the real repository and verifying backup preservation", flush=True)
+        run("--reset-plugins", "--prepare-only")
+        backups = set(backup_root.iterdir()) - before
+        assert len(backups) == 1
+        assert not marker.exists()
+        assert (next(iter(backups)) / marker.name).read_text(encoding="utf-8") == "KEEP_IN_BACKUP"
     probe = repo / "_bootstrap_smoke_probe.py"
     probe.write_text('''from pathlib import Path
 import runpy
 import sys
+import ctypes
 from PySide6.QtCore import QTimer
 import launcher.app as application
 
@@ -69,6 +88,11 @@ class ProbeApplication(BaseApplication):
         super().__init__(*args, **kwargs)
         QTimer.singleShot(3000, self.verify)
     def verify(self):
+        if ctypes.windll.kernel32.GetConsoleWindow():
+            print("CONSOLE_WINDOW_FOUND", flush=True)
+            self.exit(3)
+            return
+        print("NO_CONSOLE_WINDOW", flush=True)
         visible = [widget for widget in self.topLevelWidgets() if widget.isVisible()]
         print("MAIN_PY_WINDOW_OK" if visible else "NO_WINDOW", flush=True)
         self.exit(0 if visible else 2)
@@ -83,6 +107,12 @@ runpy.run_path(str(entry), run_name="__main__")
         config["proxy_url"] = "http://127.0.0.1:1"
         config["update_on_launch"] = True
         config["update_timeout"] = 1
+    application_log = target / "logs/application.log"
+    log_offset = application_log.stat().st_size if application_log.exists() else 0
+    def current_application_output():
+        with application_log.open("rb") as stream:
+            stream.seek(log_offset)
+            return stream.read().decode("utf-8", errors="replace")
     try:
         config_path.write_text(json.dumps(config), encoding="utf-8")
         print("Running the repository main.py with an offscreen Qt event loop", flush=True)
@@ -102,7 +132,7 @@ runpy.run_path(str(entry), run_name="__main__")
             kernel.CloseHandle(handle)
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
-            if "MAIN_PY_WINDOW_OK" in (target / "logs/application.log").read_text(encoding="utf-8"):
+            if "MAIN_PY_WINDOW_OK" in current_application_output():
                 break
             time.sleep(0.1)
         else:
@@ -110,7 +140,9 @@ runpy.run_path(str(entry), run_name="__main__")
     finally:
         config_path.write_text(original, encoding="utf-8")
         probe.unlink(missing_ok=True)
-    assert "MAIN_PY_WINDOW_OK" in (target / "logs/application.log").read_text(encoding="utf-8")
+    assert "MAIN_PY_WINDOW_OK" in current_application_output()
+    assert "NO_CONSOLE_WINDOW" in current_application_output()
+    assert gui_subsystem(target / ".venv/Scripts/pythonw.exe") == 2
     if args.offline_update:
         assert "已保留本地版本" in (target / "logs/start.log").read_text(encoding="utf-8")
     revision = subprocess.check_output([str(target / "runtime/git/cmd/git.exe"), "-c", "safe.directory=" + repo.as_posix(), "rev-parse", "HEAD"],
@@ -122,6 +154,8 @@ runpy.run_path(str(entry), run_name="__main__")
               "launcher_exited_after_ready": "passed", "application_survived_launcher_exit": "passed",
               "application_logging_after_launcher_exit": "passed", "gui_auto_close_tested": args.gui,
               "offline_update_fallback_tested": args.offline_update,
+              "launcher_gui_subsystem": "passed", "application_console_window_absent": "passed",
+              "repository_reset_and_backup_tested": args.reset_plugins,
               "repository_revision": revision, "test_directory": str(target)}
     (ROOT / "dist/smoke-report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report, indent=2), flush=True)
